@@ -1,0 +1,96 @@
+# =============================================================================
+# GRPO Training Config — Qwen2.5-3B on H200 141GB
+# =============================================================================
+#
+# The H200 has 141GB HBM3e (vs H100's 80GB HBM3), with 4.8 TB/s bandwidth.
+# This lets us push batch size, generation count, and completion length
+# well beyond what fits on an H100 — better training signal per step.
+#
+# Memory budget:
+#   Model (bf16):             6 GB
+#   Gradients (bf16):         6 GB
+#   Optimizer (AdamW):       24 GB
+#   KV cache + activations:  ~40-55 GB (batch=2, G=16, 2048 tokens, grad ckpt)
+#   Total:                   ~80-90 GB → fits in 141 GB with plenty of margin
+#
+# Usage:
+#   python src/train_grpo.py --config configs/grpo_qwen2.5_3b_h200.yaml
+#
+# Expected training time: ~5h (1000 steps)
+# Expected memory usage:  ~80-90 GB
+#
+# === What the extra memory buys us ===
+#
+#   H100 80GB:  batch=1, G=12, max_completion=1536, accum=8
+#               → 96 completions per update (8 unique prompts)
+#
+#   H200 141GB: batch=2, G=16, max_completion=2048, accum=4
+#               → 128 completions per update (8 unique prompts)
+#
+# More generations (16 vs 12) = more stable advantage estimation.
+# Longer completions (2048 vs 1536) = room for deeper reasoning chains.
+# Bigger batch (2 vs 1) with fewer accum steps (4 vs 8) = faster wall-clock.
+# =============================================================================
+
+# --- Model ---
+model_name_or_path: Qwen/Qwen2.5-3B
+torch_dtype: bfloat16
+model_init_kwargs:
+  torch_dtype: bfloat16
+  trust_remote_code: true
+
+# --- GRPO Algorithm ---
+# G=16: full generation count (same as 1.5B config). H200 has the memory
+# for it, and 16 > 12 gives more stable within-group advantage estimates.
+num_generations: 16
+
+beta: 0.0
+epsilon: 0.2
+loss_type: dr_grpo
+scale_rewards: false
+mask_truncated_completions: true
+reward_weights:
+  - 1.0
+  - 0.2
+
+# --- Generation ---
+temperature: 0.7
+max_prompt_length: 512
+
+# 2048 tokens: matches the 1.5B config. The 3B model produces more detailed
+# reasoning, so the extra headroom (vs 1536 on H100) reduces truncation.
+max_completion_length: 2048
+
+# --- Training ---
+learning_rate: 1.0e-6
+
+# batch=2: each micro-batch processes 2 prompts × 16 completions = 32 completions.
+# On H100 this would OOM, but H200 handles it comfortably.
+per_device_train_batch_size: 2
+
+# accum=4: with batch=2, effective prompts per update = 2 × 4 = 8.
+# Fewer accum steps + bigger micro-batch = faster wall-clock per step.
+gradient_accumulation_steps: 4
+
+max_steps: 1000
+warmup_ratio: 0.03
+max_grad_norm: 0.2
+
+# --- Memory Optimization ---
+gradient_checkpointing: true
+bf16: true
+
+# --- Logging ---
+logging_steps: 1
+log_completions: true
+report_to:
+  - wandb
+  - tensorboard
+run_name: grpo-qwen2.5-3b-r1zero-h200
+
+# --- Checkpointing ---
+output_dir: outputs/grpo-qwen2.5-3b
+save_steps: 100
+save_total_limit: 5
+
+eval_strategy: "no"
