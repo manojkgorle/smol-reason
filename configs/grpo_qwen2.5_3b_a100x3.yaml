@@ -1,0 +1,95 @@
+# =============================================================================
+# GRPO Training Config — Qwen2.5-3B on 3× A100 80GB (Data Parallel)
+# =============================================================================
+#
+# Multi-GPU config using 3 A100 80GB GPUs in a single node.
+# Each GPU holds a full copy of the 3B model and processes different prompts.
+# Gradients are synced via all-reduce before each optimizer step.
+#
+# Launch with:
+#   accelerate launch --num_processes 3 src/train_grpo.py \
+#       --config configs/grpo_qwen2.5_3b_a100x3.yaml
+#
+# Or:
+#   torchrun --nproc_per_node 3 src/train_grpo.py \
+#       --config configs/grpo_qwen2.5_3b_a100x3.yaml
+#
+# Memory per GPU:  ~57 GB (same as single-GPU — full model replica)
+# Expected time:   ~4.3h (1000 steps)
+# Expected cost:   ~$17 on Jarvis Labs (3 × $1.29/hr × 4.3h)
+#
+# === How multi-GPU GRPO works ===
+#
+# Single GPU processes:  batch × accum × G completions per update
+# With 3 GPUs (data parallel), each GPU processes its own share:
+#
+#   GPU 0: 1 prompt × 3 accum steps × 12 completions = 36 completions
+#   GPU 1: 1 prompt × 3 accum steps × 12 completions = 36 completions
+#   GPU 2: 1 prompt × 3 accum steps × 12 completions = 36 completions
+#                                                        ─────────────
+#   Total per update:                                    108 completions
+#   Unique prompts per update:                           9
+#
+# Gradients are averaged across all 3 GPUs (all-reduce) before
+# the optimizer step. This means all 3 model copies stay in sync.
+#
+# The key tuning is gradient_accumulation_steps: reduced from 8 (single GPU)
+# to 3, because 3 GPUs × 3 accum ≈ single GPU × 8 accum.
+# =============================================================================
+
+# --- Model ---
+model_name_or_path: Qwen/Qwen2.5-3B
+torch_dtype: bfloat16
+model_init_kwargs:
+  torch_dtype: bfloat16
+  trust_remote_code: true
+
+# --- GRPO Algorithm ---
+num_generations: 12
+beta: 0.0
+epsilon: 0.2
+loss_type: dr_grpo
+scale_rewards: false
+mask_truncated_completions: true
+reward_weights:
+  - 1.0
+  - 0.2
+
+# --- Generation ---
+temperature: 0.7
+max_prompt_length: 512
+max_completion_length: 1536
+
+# --- Training ---
+learning_rate: 1.0e-6
+
+# Each GPU processes 1 prompt per micro-batch (× 12 generations = 12 completions).
+per_device_train_batch_size: 1
+
+# Reduced from 8 to 3 because we have 3 GPUs.
+# Effective prompts per update: 3 GPUs × 1 batch × 3 accum = 9
+# (close to the single-GPU target of 8)
+gradient_accumulation_steps: 3
+
+max_steps: 1000
+warmup_ratio: 0.03
+max_grad_norm: 0.2
+
+# --- Memory Optimization ---
+gradient_checkpointing: true
+bf16: true
+
+# --- Logging ---
+logging_steps: 1
+log_completions: true
+report_to:
+  - wandb
+  - tensorboard
+run_name: grpo-qwen2.5-3b-r1zero-3xa100
+
+# --- Checkpointing ---
+output_dir: outputs/grpo-qwen2.5-3b
+save_steps: 100
+save_total_limit: 3
+
+eval_strategy: "no"
