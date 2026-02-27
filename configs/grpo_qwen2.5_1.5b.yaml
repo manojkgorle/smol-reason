@@ -1,0 +1,194 @@
+# =============================================================================
+# Full GRPO Training Config — Qwen2.5-1.5B on A100 80GB
+# =============================================================================
+#
+# This config replicates the DeepSeek-R1-Zero experiment at 1.5B scale.
+# The model learns to reason purely through reinforcement learning (no SFT).
+#
+# Usage:
+#   python src/train_grpo.py --config configs/grpo_qwen2.5_1.5b.yaml
+#
+# Expected training time: ~8h on A100 80GB (1000 steps, HF generate)
+#                         ~5h on A100 80GB (1000 steps, with vLLM)
+# Expected memory usage:  ~34GB on A100 80GB
+#
+# For A100 40GB: reduce num_generations to 8, max_completion_length to 1024
+# =============================================================================
+
+# --- Model ---
+# We use the BASE model (not Instruct) because we want RL to discover reasoning
+# from scratch. The Instruct model has already been RLHF'd, which would confound
+# our experiment — we couldn't tell if reasoning came from our GRPO or the
+# previous RLHF training.
+model_name_or_path: Qwen/Qwen2.5-1.5B
+torch_dtype: bfloat16
+model_init_kwargs:
+  torch_dtype: bfloat16       # bfloat16 is native to A100, no precision loss vs fp32
+  trust_remote_code: true      # Required for Qwen2.5 model code
+
+# --- GRPO Algorithm ---
+# These are the core RL hyperparameters. Each one matters for training stability.
+
+# Group size: how many completions to generate per prompt.
+# GRPO computes advantages by comparing completions within each group.
+# G=16 means: for each prompt, generate 16 different answers, score them all,
+# then reinforce the better-than-average ones and penalize the worse ones.
+# Larger G = more stable advantage estimates, but more memory and compute.
+# R1-Zero paper used G=16.
+num_generations: 16
+
+# KL divergence penalty coefficient.
+# beta=0.0 means NO penalty for deviating from the original model.
+# This is more aggressive but saves memory (no reference model needed).
+# The DAPO paper showed that beta=0 works well when combined with
+# proper clipping (epsilon).
+# If training becomes unstable, try beta=0.01-0.1.
+beta: 0.0
+
+# PPO clipping range — prevents too-large policy updates.
+# The GRPO loss clips the importance ratio to [1-epsilon, 1+epsilon].
+# epsilon=0.2 means the policy can change by at most 20% per step.
+# This is critical for RL stability:
+# - Too small (0.05): learning is very slow
+# - Too large (0.5): training oscillates or diverges
+# - 0.2 is the standard PPO default, conservative and reliable.
+epsilon: 0.2
+
+# Loss normalization strategy. This is subtle but important.
+# Options: "grpo", "dr_grpo", "dapo", "bnpo", "cispo"
+#
+# "grpo" (original): normalizes by sequence length → BIASED toward short responses
+#   (shorter response = each token matters more = higher gradient per token)
+# "dr_grpo" (Dr. GRPO paper): normalizes by a global constant (max_completion_length)
+#   → unbiased, removes length preference
+# "dapo": normalizes by active tokens in the global batch → also unbiased
+#
+# We use "dr_grpo" because it's simpler and well-studied.
+loss_type: dr_grpo
+
+# Whether to normalize rewards by group standard deviation.
+# When True: advantage = (reward - mean) / std → unit variance per group
+# When False: advantage = reward - mean → raw differences
+#
+# Dr. GRPO recommends False because std normalization introduces
+# "question-difficulty bias": easy questions (all rewards similar, small std)
+# get amplified, hard questions (wide reward spread, large std) get dampened.
+# With False, the model treats all questions equally.
+scale_rewards: false
+
+# Zero out gradients for completions that hit the max_completion_length limit.
+# Why: a truncated completion is likely incomplete (reasoning cut off mid-sentence).
+# Including it in training would teach the model that incomplete reasoning is OK.
+# By masking these, we only learn from complete responses.
+mask_truncated_completions: true
+
+# Weights for our two reward functions:
+# [1.0, 0.2] = [reasoning_accuracy_reward, format_reward]
+# Correctness dominates (1.0) to prevent format-only reward hacking.
+# Format reward (0.2) provides a gentle nudge toward <think> tags.
+reward_weights:
+  - 1.0
+  - 0.2
+
+# --- Generation ---
+# These control how completions are generated during training.
+
+# Sampling temperature for generating training completions.
+# Higher = more diverse completions within each group = better exploration.
+# Lower = more focused but risk of mode collapse (all G completions identical).
+# 0.7 is a good balance — diverse enough for meaningful comparisons.
+temperature: 0.7
+
+# Maximum prompt length in tokens. GSM8K questions are typically 50-150 tokens,
+# MATH problems can be up to ~400 tokens. 512 covers virtually all problems.
+max_prompt_length: 512
+
+# Maximum completion length. This bounds how long the model can "think".
+# Too short: reasoning gets truncated → masked out → wasted compute
+# Too long: memory hungry, slower training
+# 2048 is generous for 1.5B model — most reasoning fits in 500-1000 tokens.
+# For 40GB GPU: reduce to 1024.
+max_completion_length: 2048
+
+# --- Training ---
+
+# Learning rate — deliberately conservative for RL.
+# SFT typically uses 1e-5 to 5e-5. RL uses 10x lower because:
+# - RL gradients are noisier (reward-weighted, not teacher-forced)
+# - Large updates can catastrophically forget language abilities
+# - We're fine-tuning ALL parameters (not LoRA), so each step is high-impact
+learning_rate: 1.0e-6
+
+# Batch size per device. With G=16, each prompt generates 16 completions.
+# So per_device_batch=2 means 32 completions per forward pass.
+# Memory usage scales linearly with batch_size × G × max_completion_length.
+per_device_train_batch_size: 2
+
+# Gradient accumulation: accumulate gradients over 8 micro-batches before updating.
+# Effective batch: 2 prompts/step × 8 accumulation = 16 unique prompts per update,
+# each generating 16 completions = 256 total completions per parameter update.
+# Larger effective batch = more stable RL training.
+gradient_accumulation_steps: 8
+
+# Total training steps. With ~15K training prompts and 16 prompts/update,
+# 1000 steps ≈ 1 pass through the data.
+# - 500 steps:  minimal, may see early reasoning emergence
+# - 1000 steps: solid baseline, clear format adoption
+# - 2000 steps: extended training for best results
+max_steps: 1000
+
+# Linear warmup for first 3% of steps (30 steps).
+# Gradually increases learning rate from 0 to target.
+# Prevents large updates at start when the model hasn't adapted yet.
+warmup_ratio: 0.03
+
+# Maximum gradient norm — gradient clipping for RL stability.
+# Standard value is 1.0, but RL benefits from tighter clipping.
+# 0.2 prevents any single batch from causing an outsized update.
+max_grad_norm: 0.2
+
+# --- Memory Optimization ---
+
+# Gradient checkpointing: trade compute for memory.
+# Instead of storing all activations for backprop (high memory), recompute them
+# during the backward pass (lower memory, ~30% slower).
+# Essential for fitting G=16 completions in memory.
+gradient_checkpointing: true
+
+# bfloat16 mixed precision. A100 has dedicated bf16 tensor cores.
+# Roughly halves memory usage vs fp32 with negligible quality loss.
+bf16: true
+
+# --- Logging ---
+
+# Log every step — important for RL because training dynamics are much more
+# variable than SFT. You want to see reward curves at high resolution.
+logging_steps: 1
+
+# Log generated completions to W&B — lets you read actual model outputs
+# and qualitatively track reasoning emergence.
+log_completions: true
+
+report_to:
+  - wandb        # Real-time dashboards, great for monitoring RL curves
+  - tensorboard  # Local backup, works offline
+
+run_name: grpo-qwen2.5-1.5b-r1zero
+
+# --- Checkpointing ---
+
+# Save every 100 steps — frequent saves are critical for Colab where sessions
+# can disconnect at any time. With 100-step saves, you lose at most ~20-40 min
+# of training if the session dies.
+output_dir: outputs/grpo-qwen2.5-1.5b
+save_steps: 100
+
+# Keep only the 5 most recent checkpoints. Each checkpoint is ~3GB (1.5B model
+# in bf16). 5 × 3GB = 15GB — manageable on Google Drive.
+save_total_limit: 5
+
+# --- Eval ---
+# We don't use the built-in eval loop — instead we run src/evaluate.py separately
+# with greedy decoding (temp=0). This gives more control over eval settings
+# and doesn't slow down training.
+eval_strategy: "no"

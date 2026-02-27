@@ -1,0 +1,13 @@
+# Training requirements (Colab / GPU server)
+torch>=2.4
+transformers>=4.48
+trl>=0.15
+accelerate>=1.3
+datasets>=3.2
+math-verify>=0.7
+wandb
+tensorboard
+pyyaml
+
+# Optional: faster generation during GRPO
+# vllm>=0.7

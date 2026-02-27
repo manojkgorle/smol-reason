@@ -1,0 +1,76 @@
+# =============================================================================
+# Debug Config — Quick Local Testing (CPU/MPS)
+# =============================================================================
+#
+# This config is for verifying the training pipeline works before running
+# on a GPU. It uses tiny values for everything so it runs in ~5 minutes
+# on a laptop CPU.
+#
+# What it tests:
+# - Config parsing works
+# - Dataset loading works
+# - Reward functions work
+# - GRPOTrainer initializes and runs
+# - Checkpointing works
+#
+# What it does NOT test:
+# - Whether the model actually learns (50 steps is not enough)
+# - GPU memory usage (CPU doesn't have same constraints)
+# - vLLM generation (CPU-only)
+#
+# Usage:
+#   python src/train_grpo.py --config configs/grpo_debug.yaml
+# =============================================================================
+
+# Model — same model, but float32 for CPU compatibility
+model_name_or_path: Qwen/Qwen2.5-1.5B
+torch_dtype: float32
+model_init_kwargs:
+  torch_dtype: float32
+  trust_remote_code: true
+
+# GRPO — small group size for fast iteration
+# G=4 means only 4 completions per prompt (vs 16 in full config)
+# This is too small for good advantage estimation but fine for testing.
+num_generations: 4
+beta: 0.0
+epsilon: 0.2
+loss_type: dr_grpo
+scale_rewards: false
+mask_truncated_completions: true
+reward_weights:
+  - 1.0
+  - 0.2
+
+# Generation — short completions for speed
+# 256 tokens is enough to check that generation and reward computation work,
+# even though real reasoning often needs 500-2000 tokens.
+temperature: 0.7
+max_prompt_length: 256
+max_completion_length: 256
+
+# Training — absolute minimum
+learning_rate: 1.0e-6
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+max_steps: 50                 # Just enough to verify the training loop
+warmup_ratio: 0.0             # No warmup needed for 50 steps
+max_grad_norm: 0.2
+
+# No memory optimizations needed for debug
+gradient_checkpointing: false # Disable to avoid overhead on CPU
+bf16: false                   # CPU doesn't support bf16 well
+
+# Logging — TensorBoard only (no W&B for quick local testing)
+logging_steps: 1
+log_completions: true
+report_to:
+  - tensorboard
+run_name: grpo-debug
+
+# Output
+output_dir: outputs/grpo-debug
+save_steps: 25
+save_total_limit: 2
+
+eval_strategy: "no"

@@ -1,0 +1,4 @@
+# MacBook inference requirements (Apple Silicon)
+mlx>=0.22
+mlx-lm>=0.22
+transformers>=4.48
