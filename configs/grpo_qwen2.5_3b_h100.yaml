@@ -1,0 +1,92 @@
+# =============================================================================
+# GRPO Training Config — Qwen2.5-3B on H100 80GB
+# =============================================================================
+#
+# Scaled-up config for better reasoning results on H100.
+# 3B is the sweet spot: fits full-parameter GRPO on a single H100 80GB
+# while meaningfully improving over 1.5B.
+#
+# Memory budget:
+#   Model (bf16):          6 GB
+#   Gradients (bf16):      6 GB
+#   Optimizer (AdamW):    24 GB
+#   KV cache + activations: ~20-30 GB (with gradient checkpointing)
+#   Total:                ~60 GB → fits in 80 GB with margin
+#
+# Usage:
+#   python src/train_grpo.py --config configs/grpo_qwen2.5_3b_h100.yaml
+#
+# Expected training time: ~6h on H100 80GB (1000 steps, HF generate)
+#                         ~4h on H100 80GB (1000 steps, with vLLM)
+# Expected memory usage:  ~55-65 GB on H100 80GB
+# =============================================================================
+
+# --- Model ---
+# Qwen2.5-3B base: stronger math baseline (~55-65% GSM8K) than 1.5B (~40-50%).
+# More capacity for complex reasoning chains and self-correction.
+model_name_or_path: Qwen/Qwen2.5-3B
+torch_dtype: bfloat16
+model_init_kwargs:
+  torch_dtype: bfloat16
+  trust_remote_code: true
+
+# --- GRPO Algorithm ---
+# Same algorithm settings as 1.5B — these are model-size-agnostic.
+
+# G=12: slightly reduced from 16 to save memory for the larger model.
+# 12 is still enough for stable advantage estimation.
+# With batch=1 and accum=8, this gives 96 completions per update.
+num_generations: 12
+
+beta: 0.0
+epsilon: 0.2
+loss_type: dr_grpo
+scale_rewards: false
+mask_truncated_completions: true
+reward_weights:
+  - 1.0
+  - 0.2
+
+# --- Generation ---
+temperature: 0.7
+max_prompt_length: 512
+
+# 3B can produce more detailed reasoning than 1.5B, so keep a generous limit.
+# 1536 balances reasoning depth with memory — most completions will be
+# well under this limit.
+max_completion_length: 1536
+
+# --- Training ---
+
+# Same conservative LR. 3B has more parameters but the RL dynamics are similar.
+# If training is too slow to improve, try 2e-6. If unstable, try 5e-7.
+learning_rate: 1.0e-6
+
+# batch=1 to keep memory in check (1 prompt × 12 generations = 12 completions
+# per micro-batch). With 8 accumulation steps, each update sees 8 unique prompts.
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+
+max_steps: 1000
+warmup_ratio: 0.03
+max_grad_norm: 0.2
+
+# --- Memory Optimization ---
+gradient_checkpointing: true     # Essential — saves ~15-20 GB of activation memory
+bf16: true
+
+# --- Logging ---
+logging_steps: 1
+log_completions: true
+report_to:
+  - wandb
+  - tensorboard
+run_name: grpo-qwen2.5-3b-r1zero
+
+# --- Checkpointing ---
+# Each checkpoint is ~6 GB (3B model in bf16). 5 × 6 GB = 30 GB.
+output_dir: outputs/grpo-qwen2.5-3b
+save_steps: 100
+save_total_limit: 5
+
+eval_strategy: "no"
