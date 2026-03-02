@@ -98,8 +98,19 @@ def load_math_train() -> Dataset:
 
     MATH format: each sample has "problem" and "solution" (containing \\boxed{answer}).
     We keep the full solution string because math_verify can parse \\boxed{} directly.
+
+    Uses EleutherAI/hendrycks_math (the original hendrycks/competition_math was DMCA'd).
+    This dataset is split by subject, so we load all subsets and concatenate.
     """
-    ds = load_dataset("hendrycks/competition_math", split="train")
+    subsets = [
+        "algebra", "counting_and_probability", "geometry",
+        "intermediate_algebra", "number_theory", "prealgebra", "precalculus",
+    ]
+    parts = []
+    for subset in subsets:
+        ds = load_dataset("EleutherAI/hendrycks_math", subset, split="train")
+        parts.append(ds)
+    ds = concatenate_datasets(parts)
     return ds.map(
         lambda ex: {
             "prompt": _make_prompt(ex["problem"]),
@@ -112,7 +123,15 @@ def load_math_train() -> Dataset:
 
 def load_math_test() -> Dataset:
     """Load MATH test set (5,000 problems) for evaluation."""
-    ds = load_dataset("hendrycks/competition_math", split="test")
+    subsets = [
+        "algebra", "counting_and_probability", "geometry",
+        "intermediate_algebra", "number_theory", "prealgebra", "precalculus",
+    ]
+    parts = []
+    for subset in subsets:
+        ds = load_dataset("EleutherAI/hendrycks_math", subset, split="test")
+        parts.append(ds)
+    ds = concatenate_datasets(parts)
     return ds.map(
         lambda ex: {
             "prompt": _make_prompt(ex["problem"]),
