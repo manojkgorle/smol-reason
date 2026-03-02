@@ -33,6 +33,7 @@ model_init_kwargs:
 # G=4 means only 4 completions per prompt (vs 16 in full config)
 # This is too small for good advantage estimation but fine for testing.
 num_generations: 4
+generation_batch_size: 4
 beta: 0.0
 epsilon: 0.2
 loss_type: dr_grpo

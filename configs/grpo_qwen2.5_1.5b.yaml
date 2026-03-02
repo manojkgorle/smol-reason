@@ -36,6 +36,7 @@ model_init_kwargs:
 # Larger G = more stable advantage estimates, but more memory and compute.
 # R1-Zero paper used G=16.
 num_generations: 16
+generation_batch_size: 16
 
 # KL divergence penalty coefficient.
 # beta=0.0 means NO penalty for deviating from the original model.

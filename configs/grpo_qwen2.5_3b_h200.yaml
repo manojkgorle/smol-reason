@@ -43,6 +43,7 @@ model_init_kwargs:
 # G=16: full generation count (same as 1.5B config). H200 has the memory
 # for it, and 16 > 12 gives more stable within-group advantage estimates.
 num_generations: 16
+generation_batch_size: 16
 
 beta: 0.0
 epsilon: 0.2

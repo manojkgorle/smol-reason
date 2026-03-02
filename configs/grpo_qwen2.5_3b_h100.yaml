@@ -37,6 +37,7 @@ model_init_kwargs:
 # 12 is still enough for stable advantage estimation.
 # With batch=1 and accum=8, this gives 96 completions per update.
 num_generations: 12
+generation_batch_size: 12
 
 beta: 0.0
 epsilon: 0.2
