@@ -34,7 +34,7 @@
 
 # --- Model ---
 model_name_or_path: Qwen/Qwen2.5-3B
-torch_dtype: bfloat16
+dtype: bfloat16
 model_init_kwargs:
   torch_dtype: bfloat16
   trust_remote_code: true
@@ -56,7 +56,6 @@ reward_weights:
 
 # --- Generation ---
 temperature: 0.7
-max_prompt_length: 512
 
 # 2048 tokens: matches the 1.5B config. The 3B model produces more detailed
 # reasoning, so the extra headroom (vs 1536 on H100) reduces truncation.

@@ -25,7 +25,7 @@
 # Qwen2.5-3B base: stronger math baseline (~55-65% GSM8K) than 1.5B (~40-50%).
 # More capacity for complex reasoning chains and self-correction.
 model_name_or_path: Qwen/Qwen2.5-3B
-torch_dtype: bfloat16
+dtype: bfloat16
 model_init_kwargs:
   torch_dtype: bfloat16
   trust_remote_code: true
@@ -50,7 +50,6 @@ reward_weights:
 
 # --- Generation ---
 temperature: 0.7
-max_prompt_length: 512
 
 # 3B can produce more detailed reasoning than 1.5B, so keep a generous limit.
 # 1536 balances reasoning depth with memory — most completions will be

@@ -24,7 +24,7 @@
 
 # Model — same model, but float32 for CPU compatibility
 model_name_or_path: Qwen/Qwen2.5-1.5B
-torch_dtype: float32
+dtype: float32
 model_init_kwargs:
   torch_dtype: float32
   trust_remote_code: true
@@ -47,7 +47,6 @@ reward_weights:
 # 256 tokens is enough to check that generation and reward computation work,
 # even though real reasoning often needs 500-2000 tokens.
 temperature: 0.7
-max_prompt_length: 256
 max_completion_length: 256
 
 # Training — absolute minimum
